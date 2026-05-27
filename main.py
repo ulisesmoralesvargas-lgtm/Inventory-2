@@ -8,7 +8,7 @@ Runs on Cloud Run (listens on 0.0.0.0:$PORT).
 from __future__ import annotations
 
 import os
-import io  # <-- Agregado para procesar los bytes del CSV en memoria
+import io  
 import secrets
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -18,24 +18,21 @@ import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query, Security, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from google.cloud import storage  # <-- Cliente oficial de Google Cloud Storage
+from google.cloud import storage  
 from google.cloud.sql.connector import Connector
 from pydantic import BaseModel, Field
 import sqlalchemy
 from sqlalchemy import text
 
-# ── Environment variables (set in Cloud Run → Edit & Deploy → Variables) ──────
-# DB connection
-INSTANCE_CONNECTION_NAME = os.environ["INSTANCE_CONNECTION_NAME"]  # PROJECT:REGION:INSTANCE
-DB_USER     = os.environ["DB_USER"]       # e.g. postgres
-DB_PASSWORD = os.environ["DB_PASSWORD"]
-DB_NAME     = os.environ["DB_NAME"]       # e.g. inventory
+# ── Environment variables ─────────────────────────────────────────────────────
+INSTANCE_CONNECTION_NAME = os.environ.get("INSTANCE_CONNECTION_NAME", "PROJECT:REGION:INSTANCE")
+DB_USER     = os.environ.get("DB_USER", "postgres")
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+DB_NAME     = os.environ.get("DB_NAME", "inventory")
 
-# Simple auth (set these as secrets in Cloud Run)
 ADMIN_USER     = os.environ.get("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme")
 
-# Cloud Run port
 PORT = int(os.environ.get("PORT", 8080))
 
 # ── Cloud SQL connection pool ─────────────────────────────────────────────────
@@ -60,14 +57,21 @@ engine = sqlalchemy.create_engine(
 )
 
 def get_db():
-    with engine.connect() as conn:
-        yield conn
+    # Salvaguarda por si SQL no está listo, permitiendo que el modo CSV funcione solo
+    try:
+        with engine.connect() as conn:
+            yield conn
+    except Exception:
+        yield None
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    connector.close()
+    try:
+        connector.close()
+    except Exception:
+        pass
 
 app = FastAPI(title="Inventory Management API", version="2.0.0", lifespan=lifespan)
 
@@ -127,7 +131,7 @@ class AssetPatch(BaseModel):
     day_disposed:                 Optional[str]   = None
     quantity:                     Optional[int]   = Field(None, ge=0)
 
-# ── Reference tables (public) ─────────────────────────────────────────────────
+# ── Reference tables (Manejador de Fallos para soportar modo CSV) ─────────────
 ALLOWED_REF = {"categories", "departments", "campuses", "locations",
                "suppliers", "statuses", "conditions"}
 
@@ -135,27 +139,34 @@ ALLOWED_REF = {"categories", "departments", "campuses", "locations",
 def get_reference(table: str, db=Depends(get_db)):
     if table not in ALLOWED_REF:
         raise HTTPException(status_code=404, detail="Reference table not found.")
-    rows = db.execute(text(f"SELECT id, name FROM {table} ORDER BY name")).mappings().all()
-    return [dict(r) for r in rows]
+    
+    # Si la base de datos no está conectada, enviamos datos limpios de respaldo
+    if db is None:
+        return [{"id": 1, "name": "Default / CSV Mode"}]
+        
+    try:
+        rows = db.execute(text(f"SELECT id, name FROM {table} ORDER BY name")).mappings().all()
+        return [dict(r) for r in rows]
+    except Exception:
+        return [{"id": 1, "name": "Default / CSV Mode"}]
 
 
 # ── NUEVA RUTA: Cargar Assets usando la API nativa de Google Cloud Storage ────
 BUCKET_NAME = "bucket-asset-auscc"
 BLOB_NAME = "inventory_data.csv"
 
-@app.get("/assets/csv")  # <-- Endpoint cambiado para evitar colisión con la base de datos
+@app.get("/assets/csv")  
 def get_assets_from_csv():
     try:
-        # Inicializa el cliente de almacenamiento (usa las credenciales por defecto de Cloud Run)
         storage_client = storage.Client()
         bucket = storage_client.bucket(BUCKET_NAME)
         blob = bucket.blob(BLOB_NAME)
         
-        # Descarga el contenido del archivo CSV en memoria como bytes
         content = blob.download_as_bytes()
-        
-        # Lee los bytes usando pandas
         df = pd.read_csv(io.BytesIO(content))
+        
+        # Limpieza de valores NaN/Null de Pandas para que JSON no falle al enviarse
+        df = df.fillna("")
         
         data = df.to_dict(orient="records")
         return {"data": data, "count": len(data)}
@@ -174,6 +185,9 @@ def list_assets(
     offset:     int           = Query(0, ge=0),
     db=Depends(get_db),
 ):
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database connection is unavailable.")
+
     where_clauses = []
     params = {"limit": limit, "offset": offset}
 
@@ -192,13 +206,19 @@ def list_assets(
 
     where = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
     sql = text(f"SELECT * FROM assets_view {where} ORDER BY id LIMIT :limit OFFSET :offset")
-    rows = db.execute(sql, params).mappings().all()
-    data = [dict(r) for r in rows]
-    return {"data": data, "count": len(data)}
+    
+    try:
+        rows = db.execute(sql, params).mappings().all()
+        data = [dict(r) for r in rows]
+        return {"data": data, "count": len(data)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en consulta SQL: {str(e)}")
 
 # ── GET /assets/{id} ─────────────────────────────────────────────────────────
 @app.get("/assets/{asset_id}")
 def get_asset(asset_id: int, db=Depends(get_db)):
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database connection is unavailable.")
     row = db.execute(
         text("SELECT * FROM assets_view WHERE id = :id"),
         {"id": asset_id}
@@ -214,6 +234,8 @@ def create_asset(
     _user: str = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database connection is unavailable.")
     data = payload.model_dump(exclude_none=True)
     cols = ", ".join(data.keys())
     vals = ", ".join(f":{k}" for k in data.keys())
@@ -232,6 +254,8 @@ def update_asset(
     _user: str = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database connection is unavailable.")
     data = payload.model_dump(exclude_none=True)
     if not data:
         raise HTTPException(status_code=400, detail="No fields to update.")
