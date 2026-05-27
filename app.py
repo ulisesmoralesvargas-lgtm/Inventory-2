@@ -1,8 +1,8 @@
 """
 Inventory Management System — Streamlit Frontend
-100% Google Cloud Platform — no Supabase, no Railway, no Streamlit Cloud.
-Runs on Cloud Run (listens on 0.0.0.0:$PORT via Dockerfile CMD).
-Authenticates with HTTP Basic Auth against FastAPI backend.
+100% Google Cloud Platform.
+API_URL = tu FastAPI en Cloud Run (NO el bucket de Storage).
+El CSV vive en Cloud Storage, pero se accede via FastAPI → /assets/csv
 """
 
 from __future__ import annotations
@@ -14,10 +14,11 @@ import pandas as pd
 import requests
 import streamlit as st
 
-# ── API URL: your FastAPI Cloud Run service URL ───────────────────────────────
-# Set in Cloud Run → Edit & Deploy → Variables:
-# Línea 19 de tu archivo
-API_URL = "https://storage.googleapis.com/bucket-asset-auscc/inventory_data.csv"
+# ── API URL: tu FastAPI en Cloud Run ─────────────────────────────────────────
+# IMPORTANTE: Esta URL es tu servicio FastAPI, NO el bucket de Storage.
+# Set en Cloud Run → Edit & Deploy → Variables:
+#   CLOUD_RUN_API_URL = https://inventory-api-xxxxxxxxxx-uc.a.run.app
+API_URL: str = os.environ.get("CLOUD_RUN_API_URL", "http://localhost:8080")
 
 # ── Session state defaults ────────────────────────────────────────────────────
 for key, default in [
@@ -25,13 +26,13 @@ for key, default in [
     ("username", ""),
     ("password", ""),
     ("loaded_asset", {}),
+    ("data_source", "Cloud SQL"),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
-def auth() -> tuple[str, str] | None:
-    """Returns (username, password) if logged in, else None."""
+def auth():
     if st.session_state["logged_in"]:
         return (st.session_state["username"], st.session_state["password"])
     return None
@@ -69,12 +70,10 @@ def page_login():
         submitted = st.form_submit_button("Sign In")
 
     if submitted:
-        # Verify credentials by hitting a protected endpoint
         try:
             r = requests.get(
-                f"{API_URL}/assets",
+                f"{API_URL}/health",
                 auth=(username, password),
-                params={"limit": 1},
                 timeout=10,
             )
             if r.status_code == 200:
@@ -94,7 +93,15 @@ def page_login():
 def page_browse():
     st.title("📦 Asset Inventory")
 
+    # Selector de fuente de datos
     with st.sidebar:
+        st.header("Data Source")
+        source = st.radio(
+            "Load assets from:",
+            ["Cloud SQL (Database)", "Cloud Storage (CSV)"],
+            index=0,
+        )
+        st.divider()
         st.header("Filters")
         departments = [""] + [r["name"] for r in fetch_ref("departments")]
         statuses    = [""] + [r["name"] for r in fetch_ref("statuses")]
@@ -105,13 +112,36 @@ def page_browse():
         campus = st.selectbox("Campus",     campuses)
         search = st.text_input("Search description / tag")
 
+    # ── Cargar desde Cloud Storage CSV via FastAPI ────────────────────────────
+    if source == "Cloud Storage (CSV)":
+        st.info("📂 Loading from **Cloud Storage bucket** via FastAPI `/assets/csv`")
+        with st.spinner("Loading CSV from Cloud Storage…"):
+            try:
+                r = requests.get(f"{API_URL}/assets/csv", timeout=20)
+                r.raise_for_status()
+                payload = r.json()
+            except Exception as e:
+                st.error(f"Could not load CSV: {e}")
+                return
+
+        data = payload.get("data", [])
+        st.caption(f"{len(data)} asset(s) found in CSV")
+        if not data:
+            st.info("No data found in CSV.")
+            return
+        df = pd.DataFrame(data)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        return
+
+    # ── Cargar desde Cloud SQL via FastAPI ────────────────────────────────────
+    st.info("🗄️ Loading from **Cloud SQL** via FastAPI `/assets`")
     params: dict = {}
     if dept:   params["department"] = dept
     if status: params["status"]     = status
     if campus: params["campus"]     = campus
     if search: params["search"]     = search
 
-    with st.spinner("Loading assets…"):
+    with st.spinner("Loading assets from Cloud SQL…"):
         try:
             r = requests.get(f"{API_URL}/assets", params=params, timeout=15)
             r.raise_for_status()
@@ -199,24 +229,24 @@ def page_add():
             return
 
         body = {
-            "description":             description,
-            "quantity":                quantity,
-            "price":                   price or None,
-            "notes":                   notes or None,
-            "asset_tag":               asset_tag or None,
-            "serial_number":           serial_number or None,
-            "part_number":             part_number or None,
-            "po_number":               po_number or None,
-            "category_id":             cats.get(category_id),
-            "department_id":           depts.get(department_id),
-            "campus_id":               cams.get(campus_id),
-            "location_id":             locs.get(location_id),
-            "supplier_id":             sups.get(supplier_id),
-            "status_id":               stats.get(status_id),
-            "condition_id":            conds.get(condition_id),
-            "purchase_date":           str(purchase_date)          if purchase_date          else None,
-            "date_placed_in_service":  str(date_placed_in_service) if date_placed_in_service else None,
-            "last_day_scanned":        str(last_day_scanned)       if last_day_scanned       else None,
+            "description":            description,
+            "quantity":               quantity,
+            "price":                  price or None,
+            "notes":                  notes or None,
+            "asset_tag":              asset_tag or None,
+            "serial_number":          serial_number or None,
+            "part_number":            part_number or None,
+            "po_number":              po_number or None,
+            "category_id":            cats.get(category_id),
+            "department_id":          depts.get(department_id),
+            "campus_id":              cams.get(campus_id),
+            "location_id":            locs.get(location_id),
+            "supplier_id":            sups.get(supplier_id),
+            "status_id":              stats.get(status_id),
+            "condition_id":           conds.get(condition_id),
+            "purchase_date":          str(purchase_date)          if purchase_date          else None,
+            "date_placed_in_service": str(date_placed_in_service) if date_placed_in_service else None,
+            "last_day_scanned":       str(last_day_scanned)       if last_day_scanned       else None,
         }
         body = {k: v for k, v in body.items() if v is not None}
 
