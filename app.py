@@ -29,7 +29,7 @@ for key, default in [
     if key not in st.session_state:
         st.session_state[key] = default
 
-# ── Auth helpers ──────────────────────────────────────────────────────────[...]
+# ── Auth helpers ──────────────────────────────────────────────────────────────
 def auth() -> tuple[str, str] | None:
     """Returns (username, password) if logged in, else None."""
     if st.session_state["logged_in"]:
@@ -58,7 +58,7 @@ def fetch_ref(table: str) -> list[dict]:
 def ref_map(table: str) -> dict[str, int]:
     return {row["name"]: row["id"] for row in fetch_ref(table)}
 
-# ── Page: Login ──────────────────────────────────────────────────────────[...]
+# ── Page: Login ───────────────────────────────────────────────────────────────
 def page_login():
     st.title("🔐 Sign In")
     st.caption("Enter the admin credentials set in your Cloud Run environment variables.")
@@ -149,7 +149,7 @@ def page_browse():
         except Exception as e:
             st.error(str(e))
 
-# ── Page: Add Asset ────────────────────────────────────────────────────────[...]
+# ── Page: Add Asset ───────────────────────────────────────────────────────────
 def page_add():
     if not st.session_state["logged_in"]:
         st.warning("You must be logged in to add assets.")
@@ -232,7 +232,7 @@ def page_add():
         except Exception as e:
             st.error(str(e))
 
-# ── Page: Update Asset ───────────────────────────────────────────────────────[...]
+# ── Page: Update Asset ────────────────────────────────────────────────────────
 def page_update():
     if not st.session_state["logged_in"]:
         st.warning("You must be logged in to update assets.")
@@ -299,7 +299,7 @@ def page_update():
         except Exception as e:
             st.error(str(e))
 
-# ── Navigation ──────────────────────────────────────────────────────────[...]
+# ── Navigation ────────────────────────────────────────────────────────────────
 def main():
     st.set_page_config(
         page_title="Inventory Management System",
