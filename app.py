@@ -16,8 +16,8 @@ import streamlit as st
 
 # ── API URL: your FastAPI Cloud Run service URL ───────────────────────────────
 # Set in Cloud Run → Edit & Deploy → Variables:
-#   CLOUD_RUN_API_URL = https://inventory-api-xxxxxxxxxx-uc.a.run.app
-API_URL = "https://tu-servicio-backend-xxxxxx.a.run.app/assets/csv"
+# Cambia la línea 19 por esto:
+API_URL = "https://inventory-2-271456327495.northamerica-south1.run.app"
 
 # ── Session state defaults ────────────────────────────────────────────────────
 for key, default in [
