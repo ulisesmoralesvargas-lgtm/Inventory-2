@@ -6,7 +6,7 @@ WORKDIR /app
 
 # 3. Copiar e instalar los requerimientos del FRONTEND
 # (Asegúrate de cambiar el nombre si tu archivo se llama diferente, ej: requirements.frontend.txt)
-COPY requirements.txt .
+COPY requirements.frontend.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 4. Copiar todo el código del proyecto al contenedor
