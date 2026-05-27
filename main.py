@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 import uvicorn
+import pandas as pd  # <-- Agregado para leer tu CSV de Cloud Storage
 from fastapi import Depends, FastAPI, HTTPException, Query, Security, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -135,7 +136,20 @@ def get_reference(table: str, db=Depends(get_db)):
     rows = db.execute(text(f"SELECT id, name FROM {table} ORDER BY name")).mappings().all()
     return [dict(r) for r in rows]
 
-# ── GET /assets ───────────────────────────────────────────────────────────────
+
+# ── NUEVA RUTA: Cargar Assets desde Google Cloud Storage (CSV) ─────────────────
+CSV_URL = "https://storage.googleapis.com/bucket-asset-auscc/inventory_data.csv"
+
+@app.get("/assets/csv")
+def get_assets_from_csv():
+    try:
+        df = pd.read_csv(CSV_URL)
+        return df.to_dict(orient="records")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error leyendo el CSV: {str(e)}")
+
+
+# ── GET /assets (Desde la Base de Datos Cloud SQL) ────────────────────────────
 @app.get("/assets")
 def list_assets(
     department: Optional[str] = Query(None),
