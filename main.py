@@ -140,11 +140,13 @@ def get_reference(table: str, db=Depends(get_db)):
 # ── NUEVA RUTA: Cargar Assets desde Google Cloud Storage (CSV) ─────────────────
 CSV_URL = "https://storage.googleapis.com/bucket-asset-auscc/inventory_data.csv"
 
-@app.get("/assets/csv")
+@app.get("/assets")  # <-- Le quitamos el '/csv' para que Streamlit la encuentre directo
 def get_assets_from_csv():
     try:
         df = pd.read_csv(CSV_URL)
-        return df.to_dict(orient="records")
+        # Formateamos la respuesta para que coincida exactamente con lo que espera tu app.py
+        data = df.to_dict(orient="records")
+        return {"data": data, "count": len(data)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error leyendo el CSV: {str(e)}")
 
