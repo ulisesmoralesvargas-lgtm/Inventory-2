@@ -18,7 +18,7 @@ import streamlit as st
 # IMPORTANTE: Esta URL es tu servicio FastAPI, NO el bucket de Storage.
 # Set en Cloud Run → Edit & Deploy → Variables:
 #   CLOUD_RUN_API_URL = https://inventory-api-xxxxxxxxxx-uc.a.run.app
-API_URL: str = os.environ.get("CLOUD_RUN_API_URL", "http://localhost:8080")
+API_URL: str = os.environ.get("CLOUD_RUN_API_URL", "http://localhost:8000")
 
 # ── Session state defaults ────────────────────────────────────────────────────
 for key, default in [
