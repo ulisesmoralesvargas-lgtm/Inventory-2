@@ -1,20 +1,20 @@
-# 1. Usar una imagen oficial de Python ligera
+# 1. Usar la imagen de Python
 FROM python:3.11-slim
 
-# 2. Configurar el directorio de trabajo dentro del contenedor
+# 2. Directorio de trabajo
 WORKDIR /app
 
-# 3. Copiar solo el archivo de requerimientos del backend
-COPY requirements.backend.txt .
+# 3. Copiar el requirements de Streamlit (Asegúrate de que se llame requirements.txt)
+COPY requirements.txt .
 
-# 4. Instalar las dependencias de Python
-RUN pip install --no-cache-dir -r requirements.backend.txt
+# 4. Instalar las librerías de Streamlit
+RUN pip install --no-cache-dir -r requirements.txt
 
-# 5. Copiar el resto de los archivos del proyecto (como main.py y app.py)
+# 5. Copiar todo el código del proyecto
 COPY . .
 
-# 6. Exponer el puerto que Cloud Run exige por defecto
+# 6. Exponer el puerto de Cloud Run
 EXPOSE 8080
 
-# Cambia la última línea para que quede exactamente así:
+# 7. Comando de arranque CORRECTO para Streamlit
 CMD ["streamlit", "run", "app.py", "--server.port=8080", "--server.address=0.0.0.0"]
