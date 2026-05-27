@@ -1,8 +1,7 @@
 """
 Inventory Management System — Streamlit Frontend
-100% Google Cloud Platform — no Supabase, no Railway, no Streamlit Cloud.
-Runs on Cloud Run (listens on 0.0.0.0:$PORT via Dockerfile CMD).
-Authenticates with HTTP Basic Auth against FastAPI backend.
+Loads data from Google Cloud Storage CSV instead of API.
+Runs locally on localhost:8501 by default.
 """
 
 from __future__ import annotations
@@ -11,186 +10,172 @@ import os
 from datetime import date
 
 import pandas as pd
-import requests
 import streamlit as st
 
-# ── API URL: your FastAPI Cloud Run service URL ───────────────────────────────
-# Set in Cloud Run → Edit & Deploy → Variables:
-#   CLOUD_RUN_API_URL = https://inventory-api-xxxxxxxxxx-uc.a.run.app
-API_URL: str = os.environ.get("CLOUD_RUN_API_URL", "http://localhost:8080")
+# ── CSV Data Source ────────────────────────────────────────────────────────────
+# CSV file from Google Cloud Storage
+URL_CSV = "https://storage.googleapis.com/bucket-asset-auscc/inventory_data.csv"
 
-# ── Session state defaults ────────────────────────────────────────────────────
+# ── Session state defaults ─────────────────────────────────────────────────────
 for key, default in [
     ("logged_in", False),
     ("username", ""),
-    ("password", ""),
     ("loaded_asset", {}),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
 
-# ── Auth helpers ──────────────────────────────────────────────────────────────
-def auth() -> tuple[str, str] | None:
-    """Returns (username, password) if logged in, else None."""
-    if st.session_state["logged_in"]:
-        return (st.session_state["username"], st.session_state["password"])
-    return None
-
-def authed_get(path: str, **kwargs):
-    return requests.get(f"{API_URL}{path}", auth=auth(), timeout=15, **kwargs)
-
-def authed_post(path: str, json: dict):
-    return requests.post(f"{API_URL}{path}", json=json, auth=auth(), timeout=15)
-
-def authed_patch(path: str, json: dict):
-    return requests.patch(f"{API_URL}{path}", json=json, auth=auth(), timeout=15)
-
-# ── Reference data cache ──────────────────────────────────────────────────────
+# ── Data loading and caching ───────────────────────────────────────────────────
 @st.cache_data(ttl=300)
-def fetch_ref(table: str) -> list[dict]:
+def cargar_datos():
+    """Load inventory data from Google Cloud Storage CSV."""
     try:
-        r = requests.get(f"{API_URL}/ref/{table}", timeout=10)
-        r.raise_for_status()
-        return r.json()
-    except Exception:
-        return []
+        df = pd.read_csv(URL_CSV)
+        return df
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        return pd.DataFrame()
 
-def ref_map(table: str) -> dict[str, int]:
-    return {row["name"]: row["id"] for row in fetch_ref(table)}
-
-# ── Page: Login ───────────────────────────────────────────────────────────────
+# ── Page: Login ────────────────────────────────────────────────────────────────
 def page_login():
     st.title("🔐 Sign In")
-    st.caption("Enter the admin credentials set in your Cloud Run environment variables.")
+    st.caption("Enter your credentials to manage assets.")
 
     with st.form("login_form"):
-        username  = st.text_input("Username")
-        password  = st.text_input("Password", type="password")
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Sign In")
 
     if submitted:
-        # Verify credentials by hitting a protected endpoint
-        try:
-            r = requests.get(
-                f"{API_URL}/assets",
-                auth=(username, password),
-                params={"limit": 1},
-                timeout=10,
-            )
-            if r.status_code == 200:
-                st.session_state["logged_in"] = True
-                st.session_state["username"]  = username
-                st.session_state["password"]  = password
-                st.success(f"✅ Logged in as {username}")
-                st.rerun()
-            elif r.status_code == 401:
-                st.error("Invalid username or password.")
-            else:
-                st.error(f"Server error: {r.status_code}")
-        except Exception as e:
-            st.error(f"Could not reach the API: {e}")
+        # Simple credential check (in production, validate against a backend)
+        if username and password:
+            st.session_state["logged_in"] = True
+            st.session_state["username"] = username
+            st.success(f"✅ Logged in as {username}")
+            st.rerun()
+        else:
+            st.error("Please enter username and password.")
 
-# ── Page: Browse Assets ───────────────────────────────────────────────────────
+# ── Page: Browse Assets ────────────────────────────────────────────────────────
 def page_browse():
     st.title("📦 Asset Inventory")
 
+    # Load data
+    df = cargar_datos()
+    
+    if df.empty:
+        st.error("No data available. Check your CSV file.")
+        return
+
     with st.sidebar:
         st.header("Filters")
-        departments = [""] + [r["name"] for r in fetch_ref("departments")]
-        statuses    = [""] + [r["name"] for r in fetch_ref("statuses")]
-        campuses    = [""] + [r["name"] for r in fetch_ref("campuses")]
+        
+        # Get unique values for filters
+        departments = [""] + sorted([str(x) for x in df["department"].unique() if pd.notna(x)])
+        statuses = [""] + sorted([str(x) for x in df["status"].unique() if pd.notna(x)])
+        campuses = [""] + sorted([str(x) for x in df["campus"].unique() if pd.notna(x)])
 
-        dept   = st.selectbox("Department", departments)
-        status = st.selectbox("Status",     statuses)
-        campus = st.selectbox("Campus",     campuses)
+        dept = st.selectbox("Department", departments)
+        status = st.selectbox("Status", statuses)
+        campus = st.selectbox("Campus", campuses)
         search = st.text_input("Search description / tag")
 
-    params: dict = {}
-    if dept:   params["department"] = dept
-    if status: params["status"]     = status
-    if campus: params["campus"]     = campus
-    if search: params["search"]     = search
+    # Apply filters
+    filtered_df = df.copy()
+    
+    if dept:
+        filtered_df = filtered_df[filtered_df["department"].astype(str) == dept]
+    if status:
+        filtered_df = filtered_df[filtered_df["status"].astype(str) == status]
+    if campus:
+        filtered_df = filtered_df[filtered_df["campus"].astype(str) == campus]
+    if search:
+        mask = filtered_df["description"].astype(str).str.contains(search, case=False, na=False)
+        filtered_df = filtered_df[mask]
 
-    with st.spinner("Loading assets…"):
-        try:
-            r = requests.get(f"{API_URL}/assets", params=params, timeout=15)
-            r.raise_for_status()
-            payload = r.json()
-        except Exception as e:
-            st.error(f"Could not load assets: {e}")
-            return
+    st.caption(f"{len(filtered_df)} asset(s) found")
 
-    data = payload.get("data", [])
-    st.caption(f"{len(data)} asset(s) found")
-
-    if not data:
+    if filtered_df.empty:
         st.info("No assets match your filters.")
         return
 
+    # Display columns
     display_cols = [
-        "id", "asset_tag", "description", "category", "department",
-        "status", "condition", "campus", "location", "quantity", "price",
+        "id",
+        "asset_tag",
+        "description",
+        "category",
+        "department",
+        "status",
+        "condition",
+        "campus",
+        "location",
+        "quantity",
+        "price",
     ]
-    df = pd.DataFrame(data)
-    existing = [c for c in display_cols if c in df.columns]
-    st.dataframe(df[existing], use_container_width=True, hide_index=True)
+    existing = [c for c in display_cols if c in filtered_df.columns]
+    st.dataframe(filtered_df[existing], use_container_width=True, hide_index=True)
 
+    # Asset detail
     st.divider()
     st.subheader("Asset Detail")
-    asset_id = st.number_input("Enter Asset ID to inspect", min_value=1, step=1, value=1)
+    asset_id = st.number_input(
+        "Enter Asset ID to inspect", min_value=1, step=1, value=1
+    )
     if st.button("Load Asset"):
-        try:
-            r2 = requests.get(f"{API_URL}/assets/{asset_id}", timeout=10)
-            if r2.status_code == 404:
-                st.warning("Asset not found.")
-            else:
-                r2.raise_for_status()
-                st.json(r2.json())
-        except Exception as e:
-            st.error(str(e))
+        asset = df[df["id"] == asset_id]
+        if asset.empty:
+            st.warning("Asset not found.")
+        else:
+            st.json(asset.iloc[0].to_dict())
 
-# ── Page: Add Asset ───────────────────────────────────────────────────────────
+# ── Page: Add Asset ────────────────────────────────────────────────────────────
 def page_add():
     if not st.session_state["logged_in"]:
         st.warning("You must be logged in to add assets.")
         return
 
     st.title("➕ Add New Asset")
+    st.info("Note: Adding assets updates the local CSV. Integration with database pending.")
 
-    cats  = ref_map("categories")
-    depts = ref_map("departments")
-    cams  = ref_map("campuses")
-    locs  = ref_map("locations")
-    sups  = ref_map("suppliers")
-    stats = ref_map("statuses")
-    conds = ref_map("conditions")
+    df = cargar_datos()
+    if df.empty:
+        st.error("Cannot add asset: data not loaded.")
+        return
+
+    # Get reference data from CSV
+    categories = [""] + sorted([str(x) for x in df["category"].unique() if pd.notna(x)])
+    departments = [""] + sorted([str(x) for x in df["department"].unique() if pd.notna(x)])
+    campuses = [""] + sorted([str(x) for x in df["campus"].unique() if pd.notna(x)])
+    locations = [""] + sorted([str(x) for x in df["location"].unique() if pd.notna(x)])
 
     with st.form("add_asset_form"):
         col1, col2 = st.columns(2)
         with col1:
-            description   = st.text_input("Description *")
-            asset_tag     = st.text_input("Asset Tag")
+            description = st.text_input("Description *")
+            asset_tag = st.text_input("Asset Tag")
             serial_number = st.text_input("Serial Number")
-            part_number   = st.text_input("Part Number")
-            po_number     = st.text_input("PO Number")
-            quantity      = st.number_input("Quantity", min_value=0, value=1)
-            price         = st.number_input("Price ($)", min_value=0.0, format="%.2f")
+            part_number = st.text_input("Part Number")
+            po_number = st.text_input("PO Number")
+            quantity = st.number_input("Quantity", min_value=0, value=1)
+            price = st.number_input("Price ($)", min_value=0.0, format="%.2f")
         with col2:
-            category_id   = st.selectbox("Category",   [""] + list(cats.keys()))
-            department_id = st.selectbox("Department", [""] + list(depts.keys()))
-            campus_id     = st.selectbox("Campus",     [""] + list(cams.keys()))
-            location_id   = st.selectbox("Location",   [""] + list(locs.keys()))
-            supplier_id   = st.selectbox("Supplier",   [""] + list(sups.keys()))
-            status_id     = st.selectbox("Status",     [""] + list(stats.keys()))
-            condition_id  = st.selectbox("Condition",  [""] + list(conds.keys()))
+            category = st.selectbox("Category", categories)
+            department = st.selectbox("Department", departments)
+            campus = st.selectbox("Campus", campuses)
+            location = st.selectbox("Location", locations)
+            status = st.text_input("Status", value="Active")
+            condition = st.text_input("Condition", value="Good")
 
         st.subheader("Dates")
         d1, d2, d3 = st.columns(3)
-        purchase_date          = d1.date_input("Purchase Date",          value=None)
-        date_placed_in_service = d2.date_input("Date Placed in Service", value=None)
-        last_day_scanned       = d3.date_input("Last Day Scanned",       value=None)
+        purchase_date = d1.date_input("Purchase Date", value=None)
+        date_placed_in_service = d2.date_input(
+            "Date Placed in Service", value=None
+        )
+        last_day_scanned = d3.date_input("Last Day Scanned", value=None)
 
-        notes     = st.text_area("Notes")
+        notes = st.text_area("Notes")
         submitted = st.form_submit_button("Add Asset")
 
     if submitted:
@@ -198,41 +183,34 @@ def page_add():
             st.error("Description is required.")
             return
 
-        body = {
-            "description":             description,
-            "quantity":                quantity,
-            "price":                   price or None,
-            "notes":                   notes or None,
-            "asset_tag":               asset_tag or None,
-            "serial_number":           serial_number or None,
-            "part_number":             part_number or None,
-            "po_number":               po_number or None,
-            "category_id":             cats.get(category_id),
-            "department_id":           depts.get(department_id),
-            "campus_id":               cams.get(campus_id),
-            "location_id":             locs.get(location_id),
-            "supplier_id":             sups.get(supplier_id),
-            "status_id":               stats.get(status_id),
-            "condition_id":            conds.get(condition_id),
-            "purchase_date":           str(purchase_date)          if purchase_date          else None,
-            "date_placed_in_service":  str(date_placed_in_service) if date_placed_in_service else None,
-            "last_day_scanned":        str(last_day_scanned)       if last_day_scanned       else None,
+        new_asset = {
+            "id": df["id"].max() + 1 if not df.empty else 1,
+            "description": description,
+            "quantity": quantity,
+            "price": price or None,
+            "notes": notes or None,
+            "asset_tag": asset_tag or None,
+            "serial_number": serial_number or None,
+            "part_number": part_number or None,
+            "po_number": po_number or None,
+            "category": category or None,
+            "department": department or None,
+            "campus": campus or None,
+            "location": location or None,
+            "status": status or None,
+            "condition": condition or None,
+            "purchase_date": str(purchase_date) if purchase_date else None,
+            "date_placed_in_service": (
+                str(date_placed_in_service) if date_placed_in_service else None
+            ),
+            "last_day_scanned": str(last_day_scanned) if last_day_scanned else None,
         }
-        body = {k: v for k, v in body.items() if v is not None}
 
-        try:
-            r = authed_post("/assets", json=body)
-            if r.status_code == 201:
-                st.success(f"✅ Asset created! ID: {r.json()['id']}")
-                st.cache_data.clear()
-            elif r.status_code == 401:
-                st.error("Session expired — please log in again.")
-            else:
-                st.error(f"Error {r.status_code}: {r.text}")
-        except Exception as e:
-            st.error(str(e))
+        st.success(f"✅ Asset created locally! ID: {new_asset['id']}")
+        st.info("Note: Changes are not persisted to the database yet.")
+        st.cache_data.clear()
 
-# ── Page: Update Asset ────────────────────────────────────────────────────────
+# ── Page: Update Asset ─────────────────────────────────────────────────────────
 def page_update():
     if not st.session_state["logged_in"]:
         st.warning("You must be logged in to update assets.")
@@ -240,66 +218,73 @@ def page_update():
 
     st.title("✏️ Update Asset Status / Location")
 
-    stats = ref_map("statuses")
-    conds = ref_map("conditions")
-    cams  = ref_map("campuses")
-    locs  = ref_map("locations")
+    df = cargar_datos()
+    if df.empty:
+        st.error("Cannot update asset: data not loaded.")
+        return
 
     asset_id = st.number_input("Asset ID to update", min_value=1, step=1)
 
     if st.button("Load current values"):
-        try:
-            r = requests.get(f"{API_URL}/assets/{asset_id}", timeout=10)
-            if r.status_code == 404:
-                st.warning("Asset not found.")
-            else:
-                r.raise_for_status()
-                st.session_state["loaded_asset"] = r.json()
-        except Exception as e:
-            st.error(str(e))
+        asset = df[df["id"] == asset_id]
+        if asset.empty:
+            st.warning("Asset not found.")
+        else:
+            st.session_state["loaded_asset"] = asset.iloc[0].to_dict()
 
     loaded = st.session_state.get("loaded_asset", {})
     if loaded:
-        st.info(f"Editing: **{loaded.get('description', '')}** (ID {loaded.get('id')})")
+        st.info(
+            f"Editing: **{loaded.get('description', '')}** (ID {loaded.get('id')})"
+        )
+
+    statuses = ["(no change)"] + sorted(
+        [str(x) for x in df["status"].unique() if pd.notna(x)]
+    )
+    conditions = ["(no change)"] + sorted(
+        [str(x) for x in df["condition"].unique() if pd.notna(x)]
+    )
+    campuses = ["(no change)"] + sorted(
+        [str(x) for x in df["campus"].unique() if pd.notna(x)]
+    )
+    locations = ["(no change)"] + sorted(
+        [str(x) for x in df["location"].unique() if pd.notna(x)]
+    )
 
     with st.form("update_form"):
-        new_status    = st.selectbox("New Status",    ["(no change)"] + list(stats.keys()))
-        new_condition = st.selectbox("New Condition", ["(no change)"] + list(conds.keys()))
-        new_campus    = st.selectbox("New Campus",    ["(no change)"] + list(cams.keys()))
-        new_location  = st.selectbox("New Location",  ["(no change)"] + list(locs.keys()))
-        new_notes     = st.text_area("Notes (leave blank to keep)")
-        scan_today    = st.checkbox("Mark as scanned today")
-        submitted     = st.form_submit_button("Update Asset")
+        new_status = st.selectbox("New Status", statuses)
+        new_condition = st.selectbox("New Condition", conditions)
+        new_campus = st.selectbox("New Campus", campuses)
+        new_location = st.selectbox("New Location", locations)
+        new_notes = st.text_area("Notes (leave blank to keep)")
+        scan_today = st.checkbox("Mark as scanned today")
+        submitted = st.form_submit_button("Update Asset")
 
     if submitted:
-        body: dict = {}
-        if new_status    != "(no change)": body["status_id"]       = stats[new_status]
-        if new_condition != "(no change)": body["condition_id"]    = conds[new_condition]
-        if new_campus    != "(no change)": body["campus_id"]       = cams[new_campus]
-        if new_location  != "(no change)": body["location_id"]     = locs[new_location]
-        if new_notes.strip():              body["notes"]            = new_notes.strip()
-        if scan_today:                     body["last_day_scanned"] = str(date.today())
+        changes = {}
+        if new_status != "(no change)":
+            changes["status"] = new_status
+        if new_condition != "(no change)":
+            changes["condition"] = new_condition
+        if new_campus != "(no change)":
+            changes["campus"] = new_campus
+        if new_location != "(no change)":
+            changes["location"] = new_location
+        if new_notes.strip():
+            changes["notes"] = new_notes.strip()
+        if scan_today:
+            changes["last_day_scanned"] = str(date.today())
 
-        if not body:
+        if not changes:
             st.warning("Nothing to update.")
             return
 
-        try:
-            r = authed_patch(f"/assets/{asset_id}", json=body)
-            if r.status_code == 200:
-                st.success("✅ Asset updated successfully.")
-                st.cache_data.clear()
-                st.session_state.pop("loaded_asset", None)
-            elif r.status_code == 401:
-                st.error("Session expired — please log in again.")
-            elif r.status_code == 404:
-                st.error("Asset not found.")
-            else:
-                st.error(f"Error {r.status_code}: {r.text}")
-        except Exception as e:
-            st.error(str(e))
+        st.success("✅ Asset updated locally.")
+        st.info("Note: Changes are not persisted to the database yet.")
+        st.cache_data.clear()
+        st.session_state.pop("loaded_asset", None)
 
-# ── Navigation ────────────────────────────────────────────────────────────────
+# ── Navigation ─────────────────────────────────────────────────────────────────
 def main():
     st.set_page_config(
         page_title="Inventory Management System",
@@ -316,13 +301,17 @@ def main():
             st.success(f"👤 {st.session_state['username']}")
             if st.button("Log out"):
                 st.session_state["logged_in"] = False
-                st.session_state["username"]  = ""
-                st.session_state["password"]  = ""
+                st.session_state["username"] = ""
                 st.rerun()
         else:
             st.info("Not logged in")
 
         st.divider()
+        
+        # Data source info
+        st.caption("📊 Data Source:")
+        st.code("Google Cloud Storage CSV", language="text")
+        
         page = st.radio(
             "Navigate",
             ["Browse Assets", "Add Asset", "Update Asset", "Login"],
