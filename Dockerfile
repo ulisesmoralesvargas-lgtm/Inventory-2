@@ -16,5 +16,5 @@ COPY . .
 # 6. Exponer el puerto que Cloud Run exige por defecto
 EXPOSE 8080
 
-# 7. Arrancar la aplicación con Uvicorn usando el puerto dinámico de Google
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+# Cambia la última línea para que quede exactamente así:
+CMD ["streamlit", "run", "app.py", "--server.port=8080", "--server.address=0.0.0.0"]
