@@ -8,15 +8,17 @@ Runs on Cloud Run (listens on 0.0.0.0:$PORT).
 from __future__ import annotations
 
 import os
+import io  # <-- Agregado para procesar los bytes del CSV en memoria
 import secrets
 from contextlib import asynccontextmanager
 from typing import Optional
 
 import uvicorn
-import pandas as pd  # <-- Agregado para leer tu CSV de Cloud Storage
+import pandas as pd  
 from fastapi import Depends, FastAPI, HTTPException, Query, Security, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from google.cloud import storage  # <-- Cliente oficial de Google Cloud Storage
 from google.cloud.sql.connector import Connector
 from pydantic import BaseModel, Field
 import sqlalchemy
@@ -137,18 +139,28 @@ def get_reference(table: str, db=Depends(get_db)):
     return [dict(r) for r in rows]
 
 
-# ── NUEVA RUTA: Cargar Assets desde Google Cloud Storage (CSV) ─────────────────
-CSV_URL = "https://storage.googleapis.com/bucket-asset-auscc/inventory_data.csv"
+# ── NUEVA RUTA: Cargar Assets usando la API nativa de Google Cloud Storage ────
+BUCKET_NAME = "bucket-asset-auscc"
+BLOB_NAME = "inventory_data.csv"
 
-@app.get("/assets")  # <-- Le quitamos el '/csv' para que Streamlit la encuentre directo
+@app.get("/assets/csv")  # <-- Endpoint cambiado para evitar colisión con la base de datos
 def get_assets_from_csv():
     try:
-        df = pd.read_csv(CSV_URL)
-        # Formateamos la respuesta para que coincida exactamente con lo que espera tu app.py
+        # Inicializa el cliente de almacenamiento (usa las credenciales por defecto de Cloud Run)
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(BUCKET_NAME)
+        blob = bucket.blob(BLOB_NAME)
+        
+        # Descarga el contenido del archivo CSV en memoria como bytes
+        content = blob.download_as_bytes()
+        
+        # Lee los bytes usando pandas
+        df = pd.read_csv(io.BytesIO(content))
+        
         data = df.to_dict(orient="records")
         return {"data": data, "count": len(data)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error leyendo el CSV: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error leyendo el CSV desde la API de Storage: {str(e)}")
 
 
 # ── GET /assets (Desde la Base de Datos Cloud SQL) ────────────────────────────
@@ -162,7 +174,6 @@ def list_assets(
     offset:     int           = Query(0, ge=0),
     db=Depends(get_db),
 ):
-    # assets_view is a SQL VIEW that joins all FK tables into flat columns
     where_clauses = []
     params = {"limit": limit, "offset": offset}
 
