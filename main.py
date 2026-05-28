@@ -1,48 +1,44 @@
-import streamlit as st
-import pandas as pd
-from google.cloud import storage
+import os
 import io
+import uvicorn
+import pandas as pd
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from google.cloud import storage
 
-# 1. Page Config
-st.set_page_config(page_title="Inventory Management", layout="wide")
-st.title("📦 Inventory Dashboard (from GCS)")
+app = FastAPI(title="Assignment API")
 
-# 2. Cloud Storage Config
+# Enable CORS so your frontend can talk to your backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 BUCKET_NAME = "bucket-asset-auscc"
 FILE_NAME = "inventory_data.csv"
 
-@st.cache_data
-def load_data_from_gcs():
+# --- REQUIREMENT: FastAPI Endpoint ---
+@app.get("/assets/csv")
+def get_csv_data():
     try:
-        # Initialize the Storage Client
         storage_client = storage.Client()
         bucket = storage_client.bucket(BUCKET_NAME)
         blob = bucket.blob(FILE_NAME)
-
-        # Download and read
         content = blob.download_as_bytes()
         df = pd.read_csv(io.BytesIO(content))
-        
-        # Data Cleaning
-        df = df.fillna("")
-        return df
+        return df.fillna("").to_dict(orient="records")
     except Exception as e:
-        st.error(f"Error loading data: {e}")
-        return None
+        raise HTTPException(status_code=500, detail=str(e))
 
-# 3. Main UI Logic
-data = load_data_from_gcs()
+@app.get("/health")
+def health():
+    return {"status": "online", "framework": "FastAPI"}
 
-if data is not None:
-    st.write(f"Showing {len(data)} items from `{FILE_NAME}`")
-    
-    # Search Filter
-    search = st.text_input("Search Assets", "")
-    if search:
-        data = data[data.apply(lambda row: row.astype(str).str.contains(search, case=False).any(), axis=1)]
-    
-    # Display the Table
-    st.dataframe(data, use_container_width=True)
-else:
-    st.warning("No data found in the bucket.")
+# --- Start the App ---
+if __name__ == "__main__":
+    # Cloud Run provides the PORT environment variable
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
