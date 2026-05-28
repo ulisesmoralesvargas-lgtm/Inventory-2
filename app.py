@@ -242,23 +242,11 @@ def run_frontend():
         st.button("Login")
 
 
-# ==========================================
-# 3. LANZAMIENTO SIMULTÁNEO
+# ==========================================# 
+# 3. LANZAMIENTO INDEPENDIENTE
 # ==========================================
 if __name__ == "__main__":
-    # 1. Arrancar el API de FastAPI en el fondo
-    t = threading.Thread(target=start_backend_thread, daemon=True)
-    t.start()
-    
-    # 2. Configurar Streamlit para que use el puerto asignado por Cloud Run
-    port = os.environ.get("PORT", "8080")
-    
-    import streamlit.web.cli as stcli
     import sys
-    
-    sys.argv = [
-        "streamlit", "run", "app.py",
-        "--server.port", port,
-        "--server.address", "0.0.0.0"
-    ]
-    stcli.main()
+    # Si pasamos el argumento "backend", corre FastAPI
+    if len(sys.argv) > 1 and sys.argv[1] == "backend":
+        uvicorn.run(backend_app, host="127.0.0.1", port=8000)
