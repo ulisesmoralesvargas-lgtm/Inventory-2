@@ -1,13 +1,13 @@
 FROM python:3.11-slim
 WORKDIR /app
 
-COPY requirements.frontend.txt ./requirements.frontend.txt
-RUN pip install --no-cache-dir -r requirements.frontend.txt
+# Instalar requerimientos del backend
+COPY requirements.backend.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
 EXPOSE 8080
 
-# Arranca única y exclusivamente Streamlit
-CMD ["streamlit", "run", "app.py", "--server.port=8080", "--server.address=0.0.0.0"]
-CMD ["python", "main.py"]
+# Forzamos a arrancar solo FastAPI en el puerto que pide Google Cloud
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
