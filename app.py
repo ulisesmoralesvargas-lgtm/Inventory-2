@@ -15,10 +15,8 @@ import requests
 import streamlit as st
 
 # ── API URL: tu FastAPI en Cloud Run ─────────────────────────────────────────
-# IMPORTANTE: Esta URL es tu servicio FastAPI, NO el bucket de Storage.
-# Set en Cloud Run → Edit & Deploy → Variables:
-#   CLOUD_RUN_API_URL = https://inventory-api-xxxxxxxxxx-uc.a.run.app
-API_URL: str = os.environ.get("CLOUD_RUN_API_URL", "http://localhost:8000")
+# IMPORTANTE: Se remueve cualquier barra "/" al final de la URL base para evitar enlaces rotos.
+API_URL: str = os.environ.get("CLOUD_RUN_API_URL", "http://localhost:8000").rstrip("/")
 
 # ── Session state defaults ────────────────────────────────────────────────────
 for key, default in [
@@ -117,14 +115,16 @@ def page_browse():
         st.info("📂 Loading from **Cloud Storage bucket** via FastAPI `/assets/csv`")
         with st.spinner("Loading CSV from Cloud Storage…"):
             try:
+                # Llama exactamente a la ruta /assets/csv de tu API
                 r = requests.get(f"{API_URL}/assets/csv", timeout=20)
                 r.raise_for_status()
                 payload = r.json()
             except Exception as e:
-                st.error(f"Could not load CSV: {e}")
+                st.error(f"Could not load CSV from API: {e}")
                 return
 
-        data = payload.get("data", [])
+        # FastAPI devuelve directamente la lista de registros mapeada
+        data = payload if isinstance(payload, list) else payload.get("data", [])
         st.caption(f"{len(data)} asset(s) found in CSV")
         if not data:
             st.info("No data found in CSV.")
