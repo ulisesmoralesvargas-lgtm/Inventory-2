@@ -26,9 +26,18 @@ def get_csv_data():
         storage_client = storage.Client()
         bucket = storage_client.bucket(BUCKET_NAME)
         blob = bucket.blob(FILE_NAME)
+        
+        # Descarga el contenido en memoria
         content = blob.download_as_bytes()
         df = pd.read_csv(io.BytesIO(content))
-        return df.fillna("").to_dict(orient="records")
+        
+        # Limpieza de valores nulos para evitar errores en JSON
+        clean_df = df.fillna("")
+        records = clean_df.to_dict(orient="records")
+        
+        # ADHERIDO: Regresa el formato exacto {"data": [...]} que busca tu Streamlit
+        return {"data": records, "count": len(records)}
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -41,4 +50,3 @@ if __name__ == "__main__":
     # Cloud Run provides the PORT environment variable
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
-
